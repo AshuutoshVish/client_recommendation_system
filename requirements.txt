@@ -1,5 +1,7 @@
+torch
 numpy
 pandas
-sqlalchemy
+joblib
+SQLAlchemy
+scikit-learn
 python-dotenv
-pymysql
