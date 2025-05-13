@@ -1,10 +1,11 @@
 import os
-import torch
-import joblib
 import numpy as np
 import pandas as pd
-import torch.nn as nn
 from dotenv import load_dotenv
+import joblib
+import torch
+import torch.nn as nn
+
 
 def get_db_engine():
     from sqlalchemy import create_engine, URL
@@ -121,25 +122,21 @@ def create_dataframe(engine):
     final_df = working_on_merged_df(merged_df)
     return final_df
 
-
-
-def get_or_create_dataframe(data_path='exp/data.csv'):
-    dir_path = os.path.dirname(data_path)
+def get_or_create_dataframe(path):
+    dir_path = os.path.dirname(path)
     os.makedirs(dir_path, exist_ok=True)
     print(f"Directory exists after makedirs: {os.path.exists(dir_path)}")
 
-    if os.path.exists(data_path):
-        print(f"Loading existing dataframe from storage  :-- {data_path}")
-        df = pd.read_csv(data_path)
+    if os.path.exists(path):
+        print(f"Loading existing dataframe from storage  :-- {path}")
+        df = pd.read_csv(path)
     else:
-        print(f"No existing now Creating new dataframe at: {data_path}")
+        print(f"No existing now Creating new dataframe at: {path}")
         engine = get_db_engine()
         df = create_dataframe(engine)
-        df.to_csv(data_path, index=False)
-        print(f"Database is created at {data_path}...!")
+        df.to_csv(path, index=False)
+        print(f"Database is created at {path}...!")
     return df
-
-
 
 def create_preprocessor():
     import numpy as np
@@ -168,7 +165,7 @@ def create_preprocessor():
                                                         remainder='drop')
     return preprocessor
 
-def get_or_create_preprocessor(preprocessor_path='exp/preprocessor.joblib', fit=True):
+def get_or_create_preprocessor(preprocessor_path='main/preprocessor.joblib', fit=True):
     dir_path = os.path.dirname(preprocessor_path)
     os.makedirs(dir_path, exist_ok=True)
 
@@ -279,15 +276,13 @@ def train_autoencoder(X_all, model_path, input_dim):
             if patience_counter >= patience:
                 print("Early stopping triggered.")
                 break
+
     if best_state:
         model.load_state_dict(best_state)
         torch.save(model.state_dict(), model_path)
-        print(f"Model stored at : {model_path}")
     return model
 
-
-
-def load_or_train_autoencoder(X, model_path='exp/Client_autoencoder.pth'):
+def load_or_train_autoencoder(X, model_path='main/Client_autoencoder.pth'):
     input_dim = X.shape[1]
     model = ClientAutoencoder(input_dim)
     dir_path = os.path.dirname(model_path)
@@ -301,7 +296,7 @@ def load_or_train_autoencoder(X, model_path='exp/Client_autoencoder.pth'):
     return model
 
 
-def get_or_create_embeddings(X, model, embedding_path='exp/embeddings.npy'):
+def get_or_create_embeddings(X, model, embedding_path='main/embeddings.npy'):
     import torch.nn.functional as F
 
     dir_path = os.path.dirname(embedding_path)
@@ -321,59 +316,82 @@ def get_or_create_embeddings(X, model, embedding_path='exp/embeddings.npy'):
         np.save(embedding_path, embeddings.cpu().numpy())
         return embeddings
 
-
-df = get_or_create_dataframe('exp/data.csv') #data
-preprocessor = get_or_create_preprocessor(preprocessor_path='exp/preprocessor.joblib') #processor
+df = get_or_create_dataframe('main/data.csv') #data
+preprocessor = get_or_create_preprocessor(preprocessor_path='main/preprocessor.joblib') #processor
 X_transformed = preprocessor.fit_transform(df)
 model = load_or_train_autoencoder(X_transformed) #model
-embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='exp/embeddings.npy') # embeddings
+embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='main/embeddings.npy') # embeddings
 
 
-def recommend(jobma_catcher_id):
-    import os
+
+
+
+
+
+def recommend(df, jobma_catcher_id=2656):
     import torch
     import numpy as np
     import pandas as pd
-    from sklearn.preprocessing import normalize
+    import os
+    from sklearn.metrics.pairwise import cosine_similarity
 
-    df_data = get_or_create_dataframe(data_path='exp/data.csv')
-    preprocessor = get_or_create_preprocessor(preprocessor_path='exp/preprocessor.joblib')
+    # Create main directory if it doesn't exist
+    dir_path = 'main'
+    os.makedirs(dir_path, exist_ok=True)
+    print(f"Directory exists after makedirs: {os.path.exists(dir_path)}")
+
+    # First, run the main script to ensure all files are created with consistent dimensions
+    print("Running main script to ensure all files are created with consistent dimensions...")
+    df_data = get_or_create_dataframe('main/data.csv')
+    preprocessor = get_or_create_preprocessor(preprocessor_path='main/preprocessor.joblib')
     X_transformed = preprocessor.fit_transform(df_data)
-    model = load_or_train_autoencoder(X_transformed, model_path='exp/Client_autoencoder.pth')
-    embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='exp/embeddings.npy')
+    model = load_or_train_autoencoder(X_transformed, model_path='main/Client_autoencoder.pth')
+    embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='main/embeddings.npy')
 
-    client_df = df_data.copy()
-    sample_df = client_df[client_df["jobma_catcher_id"] == jobma_catcher_id]
+    # Now use the same preprocessor, model, and embeddings that were just created
+    candidates_df = df.copy()
+
+    # Find the client in the dataset
+    sample_df = df[df["jobma_catcher_id"] == jobma_catcher_id]
     if sample_df.empty:
         print(f"Client ID {jobma_catcher_id} not in dataset.")
         return pd.DataFrame()
 
     try:
+        # Transform the sample data using the same preprocessor
         print(f"Processing sample for client ID {jobma_catcher_id}...")
         sample_processed = preprocessor.transform(sample_df)
+
+        # Convert to tensor
         sample_tensor = torch.FloatTensor(sample_processed.toarray() if hasattr(sample_processed, 'toarray') else sample_processed)
+        print(f"Sample tensor shape: {sample_tensor.shape}")
+
+        # Get the embedding using the same model
         with torch.no_grad():
-            sample_embedding, _ = model(sample_tensor)
+            encoded, _ = model(sample_tensor)
+        print(f"Encoded shape: {encoded.shape}")
 
-        embeddings_tensor = torch.FloatTensor(embeddings)
-        sample_embedding = sample_embedding[0]
-        sample_norm = sample_embedding / torch.norm(sample_embedding)
-        embeddings_norm = embeddings_tensor / embeddings_tensor.norm(dim=1, keepdim=True)
-        similarities = torch.matmul(embeddings_norm, sample_norm).numpy()
+        # Calculate similarity with all other clients using the same embeddings
+        similarities = cosine_similarity(encoded.cpu().numpy(), embeddings)[0]
+
+        # Get top 5 similar clients (excluding the client itself)
         top_indices = np.argsort(similarities)[::-1]
-        top_indices = [idx for idx in top_indices if client_df.iloc[idx]['jobma_catcher_id'] != jobma_catcher_id][:5]
+        # Remove the query client from recommendations if present
+        top_indices = [idx for idx in top_indices if candidates_df.iloc[idx]['jobma_catcher_id'] != jobma_catcher_id][:5]
 
+        # Create recommendations
         recommendations = []
         for idx in top_indices:
-            client_data = client_df.iloc[idx].copy()
+            client_data = candidates_df.iloc[idx].copy()
             client_data['similarity_score'] = round(float(similarities[idx]), 4)
             recommendations.append(client_data)
 
+        # Create a dataframe with the recommendations
         result_df = pd.DataFrame(recommendations)
-        print(result_df.to_string())
-        # print(result_df[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 
-                        #  'wallet_amount', 'subscription_count', 'jobs_posted', 
-                        #  'since_last_login', 'pre_recorded_kit_counts', 'similarity_score']].to_string())
+
+        # Display the results
+        print(result_df[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 'jobs_posted', 'since_last_login', 'similarity_score']].head())
+
         return result_df
 
     except Exception as e:
@@ -383,11 +401,49 @@ def recommend(jobma_catcher_id):
         return pd.DataFrame()
 
 
-import time
-start_time = time.time()
 
-recommend(jobma_catcher_id=4458)
-print(df[df["jobma_catcher_id"]==4458].to_string())
 
-end_time = time.time()
-print(f"Total Time Taken: {end_time - start_time:.2f} seconds")
+
+
+
+
+
+
+
+
+
+
+
+
+import pandas as pd
+from main import recommend
+
+# Load the data
+print("Loading data...")
+df = pd.read_csv('main/data.csv')
+print(f"Data loaded with {len(df)} rows")
+
+# Test the recommend function with default client ID
+print("\nTesting with default client ID (2656):")
+result = recommend(df)
+print("\nRecommendation results:")
+if not result.empty:
+    print(result[['jobma_catcher_id', 'is_premium', 'subscription_s tatus', 'company_size', 'jobs_posted', 'since_last_login', 'similarity_score']])
+else:
+    print("No recommendations found")
+
+# Test with a different client ID
+print("\nTesting with a different client ID (9916):")
+result2 = recommend(df, jobma_catcher_id=9916)
+print("\nRecommendation results:")
+if not result2.empty:
+    print(result2[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 'jobs_posted', 'since_last_login', 'similarity_score']])
+else:
+    print("No recommendations found")
+
+
+
+
+
+
+

@@ -4,22 +4,11 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch.nn as nn
-import torch.optim as optim
 from dotenv import load_dotenv
-import torch.nn.functional as F
-from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
-from sklearn.model_selection import train_test_split
-from sklearn.metrics.pairwise import cosine_similarity
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder, FunctionTransformer
 
-
-load_dotenv()
 def get_db_engine():
     from sqlalchemy import create_engine, URL
-    
+    load_dotenv()
     db_user = os.getenv("DB_USER")
     db_password = os.getenv("DB_PASSWORD")
     db_host = os.getenv("DB_HOST")
@@ -29,18 +18,20 @@ def get_db_engine():
     if not all([db_user, db_password, db_host, db_port, db_name]):
         raise ValueError("Missing one or more required environment variables.")
 
-    db_url = URL.create(drivername="mysql+pymysql",
-                        username=db_user, 
-                        password=db_password, 
-                        host=db_host, 
-                        port=int(db_port),
-                        database=db_name)
+    db_url = URL.create(
+        drivername="mysql+pymysql",
+        username=db_user,
+        password=db_password,
+        host=db_host,
+        port=int(db_port),
+        database=db_name
+    )
     engine = create_engine(db_url)
-    engine.connect().close()
-    print("Database connection is made successfully..!")
+    with engine.connect() as conn:
+        print("Database connection is made successfully..!\n")
     return engine
 
-def process_catcher_data(engine):
+def create_dataframe(engine):
     def clean_catcher_data():
         catcher = pd.read_sql("SELECT jobma_catcher_id, is_premium, subscription_status, company_size, jobma_catcher_parent FROM jobma_catcher WHERE jobma_verified IN (1, '1')", engine).copy()
         catcher.replace("", np.nan, inplace=True)
@@ -56,6 +47,7 @@ def process_catcher_data(engine):
     def clean_wallet_data():
         wallet = pd.read_sql("SELECT catcher_id AS jobma_catcher_id, wallet_amount, is_unlimited FROM wallet", engine).copy()
         wallet['wallet_amount'] = pd.to_numeric(wallet['wallet_amount'], errors='coerce').fillna(0)
+        wallet['wallet_amount'] = np.where(wallet['wallet_amount'] < 0, 0, wallet['wallet_amount'])
         wallet['is_unlimited'] = pd.to_numeric(wallet['is_unlimited'], errors='coerce').fillna(0).astype(int)
         return wallet
 
@@ -122,13 +114,7 @@ def process_catcher_data(engine):
         return work_df
 
     catcher_df = clean_catcher_data()
-    other_dfs = [clean_wallet_data(),
-                 clean_subscription_data(),
-                 clean_invitations_data(),
-                 clean_pre_recorded_kit_data(),
-                 clean_job_posting_data(),
-                 clean_login_data()
-                ]
+    other_dfs = [clean_wallet_data(), clean_subscription_data(), clean_invitations_data(), clean_pre_recorded_kit_data(), clean_job_posting_data(), clean_login_data()]
     merged_df = catcher_df.copy()
     for df in other_dfs:
         merged_df = pd.merge(merged_df, df, how='left', on='jobma_catcher_id')
@@ -136,54 +122,69 @@ def process_catcher_data(engine):
     final_df = working_on_merged_df(merged_df)
     return final_df
 
-def get_or_create_processed_data(path='app/processed_data.csv'):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    if os.path.exists(path):
-        print(f"Loading existing Dataframe from : {path}")
-        df = pd.read_csv(path)
-    else:
-        print(f"No existing file found Creating app data at: {path}")
-        engine = get_db_engine()
-        df = process_catcher_data(engine)
-        df.to_csv(path, index=False)
-        print(f"Database is created at {path}...!")
-    return df
-df = get_or_create_processed_data()
-print("Dataframe fetched successfully...!!")
 
-def get_preprocessor():
+
+def get_or_create_dataframe(data_path='app/data.csv'):
+    dir_path = os.path.dirname(data_path)
+    os.makedirs(dir_path, exist_ok=True)
+    print(f"Directory exists after makedirs: {os.path.exists(dir_path)}")
+
+    if os.path.exists(data_path):
+        print(f"Loading existing dataframe from storage  :-- {data_path}")
+        df = pd.read_csv(data_path)
+    else:
+        print(f"No existing now Creating new dataframe at: {data_path}")
+        engine = get_db_engine()
+        df = create_dataframe(engine)
+        df.to_csv(data_path, index=False)
+        print(f"Database is created at {data_path}...!")
+    return df
+
+
+
+def create_preprocessor():
+    import numpy as np
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.compose import ColumnTransformer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder, FunctionTransformer
+    print("create_preprocessor function is runnning.......................................!!")
     categorical = ['since_last_login']
     ordinal = ['company_size']
     binary = ['is_premium', 'is_unlimited', 'subscription_status']
     numeric = ['sub_user', 'subscription_count', 'live_interview_count', 'interview_done', 'pre_recorded_kit_counts', 'invites_count', 'jobs_posted']
     log_scaled = ['subscription_sum', 'wallet_amount']
 
-    preprocessor = ColumnTransformer([('cat', Pipeline([('imputer', SimpleImputer(strategy='most_frequent')),('encoder', OneHotEncoder(handle_unknown='ignore'))]), categorical),
-                                      ('ord', Pipeline([('imputer', SimpleImputer(strategy='most_frequent')),('ordinal', OrdinalEncoder(categories=[["1-25", "26-100", "101-500", "500-1000", "More than 1000"]],handle_unknown='use_encoded_value', unknown_value=-1))]), ordinal),
-                                      ('bin', SimpleImputer(strategy='mean'), binary),
-                                      ('num', Pipeline([('imputer', SimpleImputer(strategy='mean')),('scale', StandardScaler())]), numeric),
-                                      ('log', Pipeline([('imputer', SimpleImputer(strategy='mean')),('log', FunctionTransformer(np.log1p, validate=False)),('scale', StandardScaler())]), log_scaled)])
+    preprocessor = ColumnTransformer([('cat', Pipeline([('imputer', SimpleImputer(strategy='most_frequent')),
+                                                        ('encoder', OneHotEncoder(handle_unknown='ignore'))]), categorical),
+                                      ('ord', Pipeline([('imputer', SimpleImputer(strategy='most_frequent')),
+                                                        ('ordinal', OrdinalEncoder(categories=[["1-25", "26-100", "101-500", "500-1000", "More than 1000"]],
+                                                                                   handle_unknown='use_encoded_value', unknown_value=-1))]), ordinal),
+                                      ('bin', Pipeline([('imputer', SimpleImputer(strategy='mean'))]), binary),
+                                      ('num', Pipeline([('imputer', SimpleImputer(strategy='mean')),
+                                                        ('scale', StandardScaler())]), numeric),
+                                      ('log', Pipeline([('imputer', SimpleImputer(strategy='mean')),
+                                                        ('log', FunctionTransformer(np.log1p, validate=False)),
+                                                        ('scale', StandardScaler())]), log_scaled)],
+                                                        remainder='drop')
     return preprocessor
 
-def preprocess_data(df, preprocessor_path='app/preprocessor.joblib', fit=True):
+def get_or_create_preprocessor(preprocessor_path='app/preprocessor.joblib', fit=True):
+    dir_path = os.path.dirname(preprocessor_path)
+    os.makedirs(dir_path, exist_ok=True)
+
     if os.path.exists(preprocessor_path):
         preprocessor = joblib.load(preprocessor_path)
-        features = preprocessor.transform(df)
-        print("Preprocessor loaded from disk.")
-        print("preprocess_data is runniiing......................!!")
+        print(f"Preprocessor loaded from storage :--- {preprocessor_path}")
     elif fit:
-        print("preprocess_data fit is runniiing......................!!")
-        os.makedirs(os.path.dirname(preprocessor_path), exist_ok=True)
-        preprocessor = get_preprocessor()
-        features = preprocessor.fit_transform(df)
+        preprocessor = create_preprocessor()
         joblib.dump(preprocessor, preprocessor_path)
-        print("Preprocessor trained and saved.")
+        print(f"Preprocessor trained and saved to: {preprocessor_path}")
     else:
-        print("preprocess_data is runniiing......................!!")
         raise FileNotFoundError(f"Preprocessor not found at {preprocessor_path} and fit=False.")
-    return features, preprocessor
+    return preprocessor
 
-
+#model
 class ClientAutoencoder(nn.Module):
     def __init__(self, input_dim, embedding_dim=32):
         super().__init__()
@@ -212,26 +213,37 @@ def to_tensor(X):
     return torch.FloatTensor(X.toarray() if hasattr(X, 'toarray') else X)
 
 def train_autoencoder(X_all, model_path, input_dim):
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    print("train_autoencoder is running")
+    from sklearn.model_selection import train_test_split
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    import torch.optim as optim
+    from torch.utils.data import DataLoader, TensorDataset
+
+    dir_path = os.path.dirname(model_path)
+    os.makedirs(dir_path, exist_ok=True)
+    #Can be changed or dynamic
     epochs=100
     batch_size=32
-    patience=10
+    patience= 5
+    best_loss = float('inf')
+    patience_counter = 0
+    best_state = None
+
     X_train, X_val = train_test_split(X_all, test_size=0.2, random_state=42)
     train_tensor = to_tensor(X_train)
     val_tensor = to_tensor(X_val)
+    train_loader = DataLoader(TensorDataset(train_tensor, train_tensor),
+                              batch_size=batch_size,
+                              shuffle=True)
 
-    train_loader = DataLoader(TensorDataset(train_tensor, train_tensor), batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(TensorDataset(val_tensor, val_tensor), batch_size=batch_size)
+    val_loader = DataLoader(TensorDataset(val_tensor, val_tensor),
+                            batch_size=batch_size)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = ClientAutoencoder(input_dim).to(device)
     criterion = nn.SmoothL1Loss()
     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-
-    best_loss = float('inf')
-    patience_counter = 0
-    best_state = None
 
     for epoch in range(epochs):
         model.train()
@@ -257,7 +269,7 @@ def train_autoencoder(X_all, model_path, input_dim):
                 val_loss += criterion(outputs, inputs).item()
         val_loss /= len(val_loader)
 
-        print(f"Epoch {epoch+1}/{epochs} | Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f}")
+        print(f"Epoch {epoch+1}/{epochs} | Training Loss: {train_loss:.4f} | Validity Loss: {val_loss:.4f}")
 
         if val_loss < best_loss:
             best_loss = val_loss
@@ -268,144 +280,115 @@ def train_autoencoder(X_all, model_path, input_dim):
             if patience_counter >= patience:
                 print("Early stopping triggered.")
                 break
-
     if best_state:
         model.load_state_dict(best_state)
         torch.save(model.state_dict(), model_path)
+        print(f"Model stored at : {model_path}")
     return model
 
-def load_or_train_autoencoder(X, model_path='app/client_autoencoder.pth'):
+
+
+def load_or_train_autoencoder(X, model_path='app/Client_autoencoder.pth'):
     input_dim = X.shape[1]
     model = ClientAutoencoder(input_dim)
+    dir_path = os.path.dirname(model_path)
+    os.makedirs(dir_path, exist_ok=True)
     if os.path.exists(model_path):
         model.load_state_dict(torch.load(model_path, map_location='cpu'))
-        print("Model loaded from disk...................................")
+        print(f"Model loaded from storage :----- {model_path}")
     else:
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        print("No model found. Training new model...")
+        print("No model found. Training new model...!!")
         model = train_autoencoder(X, model_path, input_dim)
     return model
 
 
-def get_or_create_embeddings(model, X, embedding_path='app/embeddings.npy'):
+def get_or_create_embeddings(X, model, embedding_path='app/embeddings.npy'):
+    import torch.nn.functional as F
+
+    dir_path = os.path.dirname(embedding_path)
+    os.makedirs(dir_path, exist_ok=True)
+
     if os.path.exists(embedding_path):
+        print(f"Loading embeddings from storage :---- {embedding_path}")
         embeddings = np.load(embedding_path)
         return torch.tensor(embeddings, dtype=torch.float32)
     else:
-        print("Extracting and saving embeddings...")
+        print("Extracting and saving new embeddings...")
         model.eval()
         with torch.no_grad():
             tensor = to_tensor(X)
             embeddings, _ = model(tensor)
             embeddings = F.normalize(embeddings, p=2, dim=1)
-        os.makedirs(os.path.dirname(embedding_path), exist_ok=True)
         np.save(embedding_path, embeddings.cpu().numpy())
         return embeddings
 
 
-def recommend_sample(user_inputs,
-                     pipeline_path='app/preprocessor.joblib', 
-                     model_path='app/client_autoencoder.pth',
-                     embedding_path='app/embeddings.npy',
-                     top_n=10):
+df = get_or_create_dataframe('app/data.csv') #data
+preprocessor = get_or_create_preprocessor(preprocessor_path='app/preprocessor.joblib') #processor
+X_transformed = preprocessor.fit_transform(df)
+model = load_or_train_autoencoder(X_transformed) #model
+embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='app/embeddings.npy') # embeddings
 
-    global df
+
+def recommend(jobma_catcher_id):
+    import os
+    import torch
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import normalize
+
+    df_data = get_or_create_dataframe(data_path='app/data.csv')
+    preprocessor = get_or_create_preprocessor(preprocessor_path='app/preprocessor.joblib')
+    X_transformed = preprocessor.fit_transform(df_data)
+    model = load_or_train_autoencoder(X_transformed, model_path='app/Client_autoencoder.pth')
+    embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='app/embeddings.npy')
+
+    client_df = df_data.copy()
+    sample_df = client_df[client_df["jobma_catcher_id"] == jobma_catcher_id]
+    if sample_df.empty:
+        print(f"Client ID {jobma_catcher_id} not in dataset.")
+        return pd.DataFrame()
+
     try:
-        df_copy = df.copy()
-        id_column = None
-        if 'jobma_catcher_id' in df_copy.columns:
-            id_column = df_copy['jobma_catcher_id'].copy()
-            df_copy = df_copy.drop('jobma_catcher_id', axis=1)
-            
-        # Load or create preprocessor
-        if os.path.exists(pipeline_path):
-            print(f"Loading preprocessor from {pipeline_path}")
-            pipeline = joblib.load(pipeline_path)
-        else:
-            print(f"Creating new preprocessor...")
-            pipeline = get_preprocessor()
-            pipeline.fit(df_copy)
-            os.makedirs(os.path.dirname(pipeline_path), exist_ok=True)
-            joblib.dump(pipeline, pipeline_path)
-
-        df_features = pipeline.transform(df_copy)
-        user_df = pd.DataFrame([user_inputs])
-        user_features = pipeline.transform(user_df)
-        input_dim = df_features.shape[1]
-        if os.path.exists(model_path):
-            print(f"Loading model from {model_path}")
-            model = ClientAutoencoder(input_dim)
-            model.load_state_dict(torch.load(model_path, map_location='cpu'))
-        else:
-            print(f"Training new model......................!!")
-            model = train_autoencoder(df_features, model_path, input_dim)
-
-        df_embeddings = get_or_create_embeddings(model, df_features, embedding_path)
-        user_tensor = to_tensor(user_features)
-        model.eval()
+        print(f"Processing sample for client ID {jobma_catcher_id}...")
+        sample_processed = preprocessor.transform(sample_df)
+        sample_tensor = torch.FloatTensor(sample_processed.toarray() if hasattr(sample_processed, 'toarray') else sample_processed)
         with torch.no_grad():
-            user_embedding, _ = model(user_tensor)
-            user_embedding = F.normalize(user_embedding, p=2, dim=1)
-        similarities = torch.matmul(user_embedding, df_embeddings.t())
+            sample_embedding, _ = model(sample_tensor)
 
-        # Get top indices
-        available_n = min(top_n, len(df_copy))
-        top_indices = similarities[0].topk(available_n).indices.cpu().numpy()
+        embeddings_tensor = torch.FloatTensor(embeddings)
+        sample_embedding = sample_embedding[0]
+        sample_norm = sample_embedding / torch.norm(sample_embedding)
+        embeddings_norm = embeddings_tensor / embeddings_tensor.norm(dim=1, keepdim=True)
+        similarities = torch.matmul(embeddings_norm, sample_norm).numpy()
+        top_indices = np.argsort(similarities)[::-1]
+        top_indices = [idx for idx in top_indices if client_df.iloc[idx]['jobma_catcher_id'] != jobma_catcher_id][:5]
 
-        # Create recommendations dataframe
-        if id_column is not None:
-            result = pd.DataFrame({
-                'jobma_catcher_id': id_column.iloc[top_indices].values,
-                'similarity': similarities[0, top_indices].cpu().numpy()
-            })
-            result = pd.merge(result, df, on='jobma_catcher_id', how='left')
-        else:
-            result = df.iloc[top_indices].copy()
-            result['similarity'] = similarities[0, top_indices].cpu().numpy()
+        recommendations = []
+        for idx in top_indices:
+            client_data = client_df.iloc[idx].copy()
+            client_data['similarity_score'] = round(float(similarities[idx]), 4)
+            recommendations.append(client_data)
 
-        return result
+        result_df = pd.DataFrame(recommendations)
+        print(result_df.to_string())
+        # print(result_df[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 
+                        #  'wallet_amount', 'subscription_count', 'jobs_posted', 
+                        #  'since_last_login', 'pre_recorded_kit_counts', 'similarity_score']].to_string())
+        return result_df
 
     except Exception as e:
-        print(f"Error in recommend_sample: {str(e)}")
+        print(f"Error during recommendation process: {str(e)}")
         import traceback
         traceback.print_exc()
         return pd.DataFrame()
 
-def recommendations():
-    global df
-    sample_user = {
-        'company_size': '26-100',
-        'is_premium': 0,
-        'subscription_status': 0,
-        'sub_user': 5,
-        'wallet_amount': 60.0,
-        'is_unlimited': 0,
-        'subscription_sum': 0.6,
-        'subscription_count': 1,
-        'recorded_interview_count': 4,
-        'live_interview_count': 2,
-        'invites_count': 7,
-        'interview_done': 5,
-        'pre_recorded_kit_counts': 2,
-        'jobs_posted': 5,
-        'since_last_login': 3
-    }
-    print(sample_user)
 
-    try:
-        print("Generating recommendations for sample user...")
-        recommendations = recommend_sample(user_inputs=sample_user, 
-                                           pipeline_path='app/preprocessor.joblib',
-                                           model_path='app/client_autoencoder.pth',
-                                           embedding_path='app/embeddings.npy',
-                                           top_n=5)
-        if not recommendations.empty:
-            print(recommendations.to_string())
-            print("Recommendation successful!")
-        else:
-            print("No recommendations generated.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        
-if __name__ == "__main__":
-    recommendations()
+import time
+start_time = time.time()
+
+recommend(jobma_catcher_id=4458)
+print(df[df["jobma_catcher_id"]==4458].to_string())
+
+end_time = time.time()
+print(f"Total Time Taken: {end_time - start_time:.2f} seconds")

@@ -2,7 +2,7 @@ torch
 numpy
 pandas
 joblib
+pymysql
 SQLAlchemy
 scikit-learn
 python-dotenv
-python
