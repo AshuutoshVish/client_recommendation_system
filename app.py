@@ -1,3 +1,6 @@
+import time
+start_time = time.time()
+
 import os
 import torch
 import joblib
@@ -77,9 +80,9 @@ def create_dataframe(engine):
         live = invitations[invitations['jobma_interview_mode'].isin([2, '2'])].groupby('jobma_catcher_id').size().reset_index(name='live_interview_count')
         invites = invitations[invitations['jobma_interview_status'].isin([0, '0'])].groupby('jobma_catcher_id').size().reset_index(name='invites_count')
         done = invitations[~invitations['jobma_interview_status'].isin([0, '0'])].groupby('jobma_catcher_id').size().reset_index(name='interview_done')
-        summary = pd.merge(recorded, live, on='jobma_catcher_id', how='left')
-        summary = pd.merge(summary, invites, on='jobma_catcher_id', how='left')
-        summary = pd.merge(summary, done, on='jobma_catcher_id', how='left')
+        summary = pd.merge(recorded, live, on='jobma_catcher_id', how='outer')
+        summary = pd.merge(summary, invites, on='jobma_catcher_id', how='outer')
+        summary = pd.merge(summary, done, on='jobma_catcher_id', how='outer')
         summary.fillna(0, inplace=True)
         return summary
 
@@ -372,9 +375,6 @@ def recommend(jobma_catcher_id):
 
         result_df = pd.DataFrame(recommendations)
         print(result_df.to_string())
-        # print(result_df[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 
-                        #  'wallet_amount', 'subscription_count', 'jobs_posted', 
-                        #  'since_last_login', 'pre_recorded_kit_counts', 'similarity_score']].to_string())
         return result_df
 
     except Exception as e:
@@ -384,11 +384,18 @@ def recommend(jobma_catcher_id):
         return pd.DataFrame()
 
 
-import time
-start_time = time.time()
 
 recommend(jobma_catcher_id=4458)
 print(df[df["jobma_catcher_id"]==4458].to_string())
+
+recommend(jobma_catcher_id=4466)
+print(df[df["jobma_catcher_id"]==4466].to_string())
+
+recommend(jobma_catcher_id=4374)
+print(df[df["jobma_catcher_id"]==4374].to_string())
+
+recommend(jobma_catcher_id=10056)
+print(df[df["jobma_catcher_id"]==10056].to_string())
 
 end_time = time.time()
 print(f"Total Time Taken: {end_time - start_time:.2f} seconds")
