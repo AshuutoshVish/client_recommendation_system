@@ -1,6 +1,3 @@
-import time
-start_time = time.time()
-
 import os
 import torch
 import joblib
@@ -75,6 +72,15 @@ def create_dataframe(engine):
         return login
 
     def clean_invitations_data():
+        # invitations = pd.read_sql("""SELECT jobma_catcher_id,
+        #                                 SUM(CASE WHEN jobma_interview_status IN (0, '0') THEN 1 ELSE 0 END) AS invites_count,
+        #                                 SUM(CASE WHEN jobma_interview_status NOT IN (0, '0') THEN 1 ELSE 0 END) AS interview_done,
+        #                                 SUM(CASE WHEN jobma_interview_mode IN (1, '1') THEN 1 ELSE 0 END) AS recorded_interview_count,
+        #                                 SUM(CASE WHEN jobma_interview_mode IN (2, '2') THEN 1 ELSE 0 END) AS live_interview_count
+        #                                 FROM 
+        #                                     jobma_pitcher_invitations
+        #                                 GROUP BY 
+        #                                     jobma_catcher_id;""", engine)
         invitations = pd.read_sql("SELECT jobma_catcher_id, jobma_interview_mode, jobma_interview_status FROM jobma_pitcher_invitations", engine)
         recorded = invitations[invitations['jobma_interview_mode'].isin([1, '1'])].groupby('jobma_catcher_id').size().reset_index(name='recorded_interview_count')
         live = invitations[invitations['jobma_interview_mode'].isin([2, '2'])].groupby('jobma_catcher_id').size().reset_index(name='live_interview_count')
@@ -152,6 +158,7 @@ def create_preprocessor():
     from sklearn.compose import ColumnTransformer
     from sklearn.preprocessing import StandardScaler, OneHotEncoder, OrdinalEncoder, FunctionTransformer
     print("create_preprocessor function is runnning.......................................!!")
+
     categorical = ['since_last_login']
     ordinal = ['company_size']
     binary = ['is_premium', 'is_unlimited', 'subscription_status']
@@ -327,11 +334,13 @@ def get_or_create_embeddings(X, model, embedding_path='app/embeddings.npy'):
 
 
 df = get_or_create_dataframe('app/data.csv') #data
-preprocessor = get_or_create_preprocessor(preprocessor_path='app/preprocessor.joblib') #processor
-X_transformed = preprocessor.fit_transform(df)
-model = load_or_train_autoencoder(X_transformed) #model
-embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='app/embeddings.npy') # embeddings
+# preprocessor = get_or_create_preprocessor(preprocessor_path='app/preprocessor.joblib') #processor
+# X_transformed = preprocessor.fit_transform(df)
+# model = load_or_train_autoencoder(X_transformed) #model
+# embeddings = get_or_create_embeddings(X_transformed, model, embedding_path='app/embeddings.npy') # embeddings
 
+import time
+start_time = time.time()
 
 def recommend(jobma_catcher_id):
     import os

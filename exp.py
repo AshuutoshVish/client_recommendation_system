@@ -371,9 +371,6 @@ def recommend(jobma_catcher_id):
 
         result_df = pd.DataFrame(recommendations)
         print(result_df.to_string())
-        # print(result_df[['jobma_catcher_id', 'is_premium', 'subscription_status', 'company_size', 
-                        #  'wallet_amount', 'subscription_count', 'jobs_posted', 
-                        #  'since_last_login', 'pre_recorded_kit_counts', 'similarity_score']].to_string())
         return result_df
 
     except Exception as e:
@@ -388,6 +385,9 @@ start_time = time.time()
 
 recommend(jobma_catcher_id=4458)
 print(df[df["jobma_catcher_id"]==4458].to_string())
+
+recommend(jobma_catcher_id=9579)
+print(df[df["jobma_catcher_id"]==9579].to_string())
 
 end_time = time.time()
 print(f"Total Time Taken: {end_time - start_time:.2f} seconds")
